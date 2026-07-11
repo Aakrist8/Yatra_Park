@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "298316663610",
+    "project_id": "yatra-park",
+    "storage_bucket": "yatra-park.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:298316663610:android:0731eaba0365858c645e03",
+        "android_client_info": {
+          "package_name": "com.example.yatra_park"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD51IXqC2dAB-RA09_z2Zobyyp-_Pqcp94"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

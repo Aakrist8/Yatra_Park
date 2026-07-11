@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:yatra_park/core/constants/app_colors.dart';
+import 'package:yatra_park/screens/admin/admin_dashboard.dart';
 
 
 class GateEntryScreen  extends StatefulWidget {
@@ -170,6 +171,10 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
                   IconButton(
                     icon: const Icon(Icons.arrow_back, color: AppColors.textWhite, size: 20,),
                     onPressed: () {
+                      Navigator.push( 
+                       context,
+                       MaterialPageRoute(builder: (context) => DashboardScreen())
+                      );
 
                     },
                   ),
