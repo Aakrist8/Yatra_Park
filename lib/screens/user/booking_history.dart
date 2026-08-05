@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class BookingHistoryPage extends StatefulWidget {
   const BookingHistoryPage({super.key});
@@ -9,65 +11,140 @@ class BookingHistoryPage extends StatefulWidget {
 
 class _BookingHistoryPageState extends State<BookingHistoryPage> {
   bool _isActiveTab = false;
+  bool _isLoading = true;
+  List<Map<String, dynamic>> _activeSessions = [];
+  List<Map<String, dynamic>> _completedSessions = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchParkingSessions();
+  }
+
+  /// 🧠 Fetch real parking sessions from Supabase
+  Future<void> _fetchParkingSessions() async {
+    setState(() => _isLoading = true);
+
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      final response = await Supabase.instance.client
+          .from('parking_sessions')
+          .select()
+          .eq('user_id', user.id)
+          .order('entry_time', ascending: false);
+
+      final List<Map<String, dynamic>> sessions = List<Map<String, dynamic>>.from(response);
+
+      final active = <Map<String, dynamic>>[];
+      final completed = <Map<String, dynamic>>[];
+
+      for (var session in sessions) {
+        final status = (session['status'] as String? ?? '').toLowerCase();
+        if (status == 'active' || status == 'ongoing') {
+          active.add(session);
+        } else {
+          completed.add(session);
+        }
+      }
+
+      setState(() {
+        _activeSessions = active;
+        _completedSessions = completed;
+        _isLoading = false;
+      });
+    } catch (error) {
+      debugPrint('Error fetching parking sessions: $error');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  /// 🧠 Convert Supabase UTC timestamp to Nepal Standard Time (UTC+5:45)
+  DateTime _toNepalTime(String timestamp) {
+    final utcTime = DateTime.parse(timestamp).toUtc();
+    return utcTime.add(const Duration(hours: 5, minutes: 45));
+  }
+
+  /// 🧠 Dynamic calculation of fare based on total elapsed duration
+  /// Base Rate: NPR 60 for 1st hour | NPR 30 for every additional hour or part thereof
+  double _calculateDynamicFare(String? entryTimeString) {
+    if (entryTimeString == null) return 0.0;
+
+    final entryTimeUtc = DateTime.tryParse(entryTimeString)?.toUtc();
+    if (entryTimeUtc == null) return 0.0;
+
+    final nowUtc = DateTime.now().toUtc();
+    final difference = nowUtc.difference(entryTimeUtc);
+
+    if (difference.isNegative || difference.inMinutes == 0) return 60.0;
+
+    // First hour rate
+    double totalFare = 60.0;
+
+    // Additional hours
+    if (difference.inMinutes > 60) {
+      int remainingMinutes = difference.inMinutes - 60;
+      int additionalHours = (remainingMinutes / 60).ceil();
+      totalFare += additionalHours * 30.0;
+    }
+
+    return totalFare;
+  }
+
+  /// 🧠 Calculate duration cleanly for both active (live) and completed sessions
+  String _calculateDuration(Map<String, dynamic> item, bool isCompleted) {
+    final entryString = item['entry_time'] as String?;
+    if (entryString == null) return '00h : 00m';
+
+    final entryTime = DateTime.tryParse(entryString)?.toUtc();
+    if (entryTime == null) return '00h : 00m';
+
+    DateTime endTime;
+    if (isCompleted && item['exit_time'] != null) {
+      endTime = DateTime.tryParse(item['exit_time'] as String)?.toUtc() ?? DateTime.now().toUtc();
+    } else {
+      endTime = DateTime.now().toUtc();
+    }
+
+    final difference = endTime.difference(entryTime);
+    if (difference.isNegative) return '00h : 00m';
+
+    final hours = difference.inHours.toString().padLeft(2, '0');
+    final minutes = (difference.inMinutes % 60).toString().padLeft(2, '0');
+
+    return '${hours}h : ${minutes}m';
+  }
+
+  /// 🧠 Helper to format date in Nepal Standard Time (e.g. Jul 22, 2026 • 05:37 PM)
+  String _formatNepalDate(String? dateString) {
+    if (dateString == null) return '';
+    try {
+      final nepaliTime = _toNepalTime(dateString);
+      return DateFormat('MMM dd, yyyy • hh:mm a').format(nepaliTime);
+    } catch (_) {
+      return dateString;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    const Color customBgColor = Color(0xFF161C2A); // Deep midnight blue
-    const Color cardBgColor = Color(0xFF1E2432);   //  cards
+    const Color customBgColor = Color(0xFF161C2A);
+    const Color cardBgColor = Color(0xFF1E2432);
 
-    // Sample data list matching the text in your image mockup
-    final List<Map<String, dynamic>> completedSessions = [
-      {
-        'date': 'May 29, 2026',
-        'fee': 'NPR 120.00',
-        'duration': '02h : 14m',
-        'vehicle': 'BA 2 CH 1234',
-        'method': 'KHALTI',
-        'isCash': false,
-      },
-      {
-        'date': 'May 29, 2026',
-        'fee': 'NPR 120.00',
-        'duration': '02h : 14m',
-        'vehicle': 'BA 2 CH 1234',
-        'method': 'KHALTI',
-        'isCash': false,
-      },
-      {
-        'date': 'May 29, 2026',
-        'fee': 'NPR 120.00',
-        'duration': '02h : 14m',
-        'vehicle': 'BA 2 CH 1234',
-        'method': 'KHALTI',
-        'isCash': false,
-      },
-      {
-        'date': 'May 29, 2026',
-        'fee': 'NPR 120.00',
-        'duration': '02h : 14m',
-        'vehicle': 'BA 2 CH 1234',
-        'method': 'KHALTI',
-        'isCash': false,
-      },
-      {
-        'date': 'May 28, 2026',
-        'fee': 'NPR 75.00',
-        'duration': '01h : 05m',
-        'vehicle': 'BA 2 CH 1234',
-        'method': 'CASH',
-        'isCash': true,
-      }
-    ];
-
+    final currentList = _isActiveTab ? _activeSessions : _completedSessions;
 
     return Scaffold(
-      backgroundColor: customBgColor, // Sets the dark background color across the full screen
-
-      // --- 1. THE TOP APP BAR ---
+      backgroundColor: customBgColor,
       appBar: AppBar(
         backgroundColor: customBgColor,
-        elevation: 0, // Removes the shadow underneath the top app bar
-        centerTitle: true, // Centers the title text horizontally
+        elevation: 0,
+        centerTitle: true,
         title: const Text(
           'Booking History',
           style: TextStyle(
@@ -77,26 +154,24 @@ class _BookingHistoryPageState extends State<BookingHistoryPage> {
           ),
         ),
       ),
-
-      // --- 2. THE MAIN BODY CONTENT ---
       body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20.0), // Adds side spacing
+        padding: const EdgeInsets.symmetric(horizontal: 20.0),
         child: Column(
           children: [
-            const SizedBox(height: 10), // Small spacer line
+            const SizedBox(height: 10),
 
-            // --- TOGGLE TRAY (Active / Completed Pill) ---
+            // TOGGLE TRAY (Active / Completed)
             Container(
               width: double.infinity,
               height: 50,
               padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
-                color: const Color(0xFF212837), // Lighter background
+                color: const Color(0xFF212837),
                 borderRadius: BorderRadius.circular(25),
               ),
               child: Row(
                 children: [
-                  // ACTIVE BUTTON TAB
+                  // ACTIVE TAB
                   Expanded(
                     child: GestureDetector(
                       onTap: () => setState(() => _isActiveTab = true),
@@ -107,7 +182,7 @@ class _BookingHistoryPageState extends State<BookingHistoryPage> {
                         ),
                         alignment: Alignment.center,
                         child: Text(
-                          'Active',
+                          'Active (${_activeSessions.length})',
                           style: TextStyle(
                             color: _isActiveTab ? Colors.white : Colors.grey,
                             fontWeight: FontWeight.w600,
@@ -118,7 +193,7 @@ class _BookingHistoryPageState extends State<BookingHistoryPage> {
                     ),
                   ),
 
-                  // COMPLETED BUTTON TAB
+                  // COMPLETED TAB
                   Expanded(
                     child: GestureDetector(
                       onTap: () => setState(() => _isActiveTab = false),
@@ -129,7 +204,7 @@ class _BookingHistoryPageState extends State<BookingHistoryPage> {
                         ),
                         alignment: Alignment.center,
                         child: Text(
-                          'Completed',
+                          'Completed (${_completedSessions.length})',
                           style: TextStyle(
                             color: !_isActiveTab ? Colors.white : Colors.grey,
                             fontWeight: FontWeight.w600,
@@ -143,122 +218,184 @@ class _BookingHistoryPageState extends State<BookingHistoryPage> {
               ),
             ),
 
-            const SizedBox(height: 24), // Spacing below toggle tray
+            const SizedBox(height: 24),
 
-            // --- LIST OF HISTORY CARDS ---
+            // MAIN LIST AREA
             Expanded(
-              child: _isActiveTab
+              child: _isLoading
                   ? const Center(
-                child: Text('No Active Sessions', style: TextStyle(color: Colors.grey)),
+                child: CircularProgressIndicator(color: Colors.blue),
               )
-                  : ListView.builder(
-                itemCount: completedSessions.length,
-                physics: const BouncingScrollPhysics(), // Adds iOS styled scroll bounce mechanics
-                itemBuilder: (context, index) {
-                  final item = completedSessions[index];
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 16),
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: cardBgColor,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Date Text
-                        Text(
-                          item['date'],
-                          style: const TextStyle(color: Colors.grey, fontSize: 14),
-                        ),
-                        const SizedBox(height: 10),
+                  : RefreshIndicator(
+                onRefresh: _fetchParkingSessions,
+                child: currentList.isEmpty
+                    ? Center(
+                  child: Text(
+                    _isActiveTab ? 'No Active Sessions' : 'No Completed Sessions',
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                )
+                    : ListView.builder(
+                  itemCount: currentList.length,
+                  physics: const AlwaysScrollableScrollPhysics(
+                    parent: BouncingScrollPhysics(),
+                  ),
+                  itemBuilder: (context, index) {
+                    final item = currentList[index];
+                    final isCompleted = !_isActiveTab;
 
-                        // Fee Row
-                        Row(
-                          children: [
-                            const Text('Parking Fee: ', style: TextStyle(color: Colors.white, fontSize: 16)),
-                            Text(
-                              item['fee'],
-                              style: const TextStyle(color: Color(0xFFE57C50), fontSize: 16, fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
+                    // 🧠 Dynamic Fare Handling
+                    String fareText;
+                    if (isCompleted) {
+                      final dbFare = item['current_fare'] ?? item['final_fare'] ?? item['amount'];
+                      fareText = dbFare != null
+                          ? 'NPR ${double.parse(dbFare.toString()).toStringAsFixed(2)}'
+                          : 'NPR 0.00';
+                    } else {
+                      // Live dynamic rate for active sessions (including 200+ hours)
+                      final liveFare = _calculateDynamicFare(item['entry_time']);
+                      fareText = 'NPR ${liveFare.toStringAsFixed(2)}';
+                    }
 
-                        // Duration Row
-                        Row(
-                          children: [
-                            const Text('Duration: ', style: TextStyle(color: Colors.grey, fontSize: 14)),
-                            Text(item['duration'], style: const TextStyle(color: Colors.white, fontSize: 14)),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
+                    final vehicle = item['vehicle_plate'] ?? 'UNASSIGNED';
+                    final dateText = _formatNepalDate(item['entry_time'] ?? item['created_at']);
+                    final durationText = _calculateDuration(item, isCompleted);
+                    final paymentMethod = (item['payment_method'] as String? ?? 'KHALTI').toUpperCase();
+                    final isCash = paymentMethod == 'CASH';
 
-                        // Nepal Registration Style License Plate Box
-                        Row(
-                          children: [
-                            const Text('Vehicle: ', style: TextStyle(color: Colors.grey, fontSize: 14)),
-                            const SizedBox(width: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF2D3545),
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: Colors.blue.shade700),
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: cardBgColor,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Date in Nepal Standard Time
+                          Text(
+                            dateText,
+                            style: const TextStyle(color: Colors.grey, fontSize: 13),
+                          ),
+                          const SizedBox(height: 10),
+
+                          // Fee Row
+                          Row(
+                            children: [
+                              const Text('Parking Fee: ', style: TextStyle(color: Colors.white, fontSize: 16)),
+                              Text(
+                                fareText,
+                                style: const TextStyle(
+                                  color: Color(0xFFE57C50),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
-                              child: Row(
-                                children: [
-                                  Container(width: 3, height: 12, color: Colors.blue), // Country side indicator bar
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    item['vehicle'],
-                                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
 
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 12.0),
-                          child: Divider(color: Colors.white10, height: 1), // Divider break line inside card
-                        ),
+                          // Duration
+                          Row(
+                            children: [
+                              const Text('Duration: ', style: TextStyle(color: Colors.grey, fontSize: 14)),
+                              Text(durationText, style: const TextStyle(color: Colors.white, fontSize: 14)),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
 
-                        // Bottom Status Line (PAID tag + payment type indicator)
-                        Row(
-                          children: [
-                            const Text('Status: ', style: TextStyle(color: Colors.grey, fontSize: 14)),
-                            const Icon(Icons.check_circle, color: Colors.green, size: 16),
-                            const SizedBox(width: 4),
-                            const Text('PAID', style: TextStyle(color: Colors.green, fontSize: 14, fontWeight: FontWeight.bold)),
-                            const SizedBox(width: 6),
-                            const Text('•', style: TextStyle(color: Colors.grey)),
-                            const SizedBox(width: 6),
-
-                            // Conditional logic: if it's not cash, print the mini purple Khalti badge circle
-                            if (!item['isCash']) ...[
+                          // Vehicle License Plate Badge
+                          Row(
+                            children: [
+                              const Text('Vehicle: ', style: TextStyle(color: Colors.grey, fontSize: 14)),
+                              const SizedBox(width: 4),
                               Container(
-                                padding: const EdgeInsets.all(2),
-                                decoration: const BoxDecoration(color: Colors.purple, shape: BoxShape.circle),
-                                child: const Text(' K ', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold)),
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF2D3545),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: Colors.blue.shade700),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(width: 3, height: 12, color: Colors.blue),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      vehicle,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12.0),
+                            child: Divider(color: Colors.white10, height: 1),
+                          ),
+
+                          // Status line
+                          Row(
+                            children: [
+                              const Text('Status: ', style: TextStyle(color: Colors.grey, fontSize: 14)),
+                              Icon(
+                                isCompleted ? Icons.check_circle : Icons.timer_outlined,
+                                color: isCompleted ? Colors.green : Colors.amber,
+                                size: 16,
                               ),
                               const SizedBox(width: 4),
-                            ],
-                            Text(
-                              item['method'],
-                              style: TextStyle(
-                                  color: item['isCash'] ? Colors.grey : Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold
+                              Text(
+                                isCompleted ? 'PAID' : 'PARKED',
+                                style: TextStyle(
+                                  color: isCompleted ? Colors.green : Colors.amber,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  );
-                },
+                              if (isCompleted) ...[
+                                const SizedBox(width: 6),
+                                const Text('•', style: TextStyle(color: Colors.grey)),
+                                const SizedBox(width: 6),
+                                if (!isCash) ...[
+                                  Container(
+                                    padding: const EdgeInsets.all(2),
+                                    decoration: const BoxDecoration(
+                                      color: Colors.purple,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Text(
+                                      ' K ',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 8,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                ],
+                                Text(
+                                  paymentMethod,
+                                  style: TextStyle(
+                                    color: isCash ? Colors.grey : Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
               ),
             ),
           ],

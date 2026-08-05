@@ -1,29 +1,49 @@
 import 'package:flutter/material.dart';
+import 'package:yatra_park/core/services/parking_repository.dart';
 
 class ParkingState extends ChangeNotifier {
-  // Master configuration constants
+  final ParkingRepository _repository = ParkingRepository();
+
   final int totalBays = 50;
-  int occupiedBays = 36; // Initial starting point data seed
+  int _occupiedBays = 0;
 
-  // Computed property to calculate available spaces automatically
-  int get availableBays => totalBays - occupiedBays;
+  int get occupiedBays => _occupiedBays;
 
-  //  to increment vehicle count when a car enters
+  /// Computed property to calculate available spaces automatically
+  int get availableBays => totalBays - _occupiedBays;
+
+  /// Expose repository fare calculation helper
+  double calculateFare(dynamic entryTime) => _repository.calculateOutstandingFare(entryTime);
+
+  /// Synchronize occupied bay count live from Supabase
+  Future<void> syncOccupancyFromDatabase() async {
+    final count = await _repository.fetchActiveOccupancyCount();
+    _occupiedBays = count;
+    notifyListeners();
+  }
+
+  /// Increments vehicle count when a car enters
   void checkInVehicle() {
-    if (occupiedBays < totalBays) {
-      occupiedBays++;
-      notifyListeners(); // 👈 This triggers all listening screens to refresh instantly
+    if (_occupiedBays < totalBays) {
+      _occupiedBays++;
+      notifyListeners();
     }
   }
 
-  // Method to decrement vehicle count when a car leaves
-  void checkOutVehicle() {
-    if (occupiedBays > 0) {
-      occupiedBays--;
-      notifyListeners(); // 👈 This triggers all listening screens to refresh instantly
+  /// Completes checkout in DB and decrements vehicle count
+  Future<bool> checkOutVehicle(String sessionId, dynamic entryTime) async {
+    final double finalFare = _repository.calculateOutstandingFare(entryTime);
+    final bool success = await _repository.closeActiveSession(sessionId, finalFare);
+
+    if (success) {
+      if (_occupiedBays > 0) {
+        _occupiedBays--;
+      }
+      notifyListeners();
     }
+    return success;
   }
 }
 
-// Global instance variable matrix so any file can access the exact same data data streams
+// Global instance variable accessible app-wide
 final parkingState = ParkingState();

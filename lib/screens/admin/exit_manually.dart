@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:supabase_flutter/supabase_flutter.dart'; // 👈 Added Supabase client
 import 'package:yatra_park/core/constants/app_colors.dart';
-import 'package:yatra_park/core/services/parking_state.dart';
 import 'package:yatra_park/screens/admin/admin_dashboard.dart';
 
 class GateEntryScreen extends StatefulWidget {
@@ -19,76 +18,61 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
   bool _isCameraInitialized = false;
   bool _isSaving = false;
 
+  // Controllers for text field text capture parameters
   final TextEditingController _vehicleNumberController = TextEditingController(text: "BA 2 CH 1234");
-  final TextEditingController _driverNameController = TextEditingController();
+  final TextEditingController _driverNameController = TextEditingController(); // 👈 Added Name Controller
 
-  // Zone & Bay Selection (4 Zones x 5 Bays = 20 Bays Total)
-  String _selectedZone = "A";
-  String _selectedBay = "Bay: A01";
-  late Map<String, List<String>> _zoneBays;
+  String _selectedBay = "Bay: A12";
 
   @override
   void initState() {
     super.initState();
-    _generate20Bays();
     _initializeDefaultCamera();
   }
 
-  /// Generates 20 bays across 4 zones (A01-A05, B01-B05, C01-C05, D01-D05)
-  void _generate20Bays() {
-    _zoneBays = {};
-    for (String zone in ['A', 'B', 'C', 'D']) {
-      _zoneBays[zone] = List.generate(5, (index) {
-        final int bayNum = index + 1;
-        return "Bay: ${zone}0$bayNum";
-      });
-    }
-  }
-
   void _initializeDefaultCamera() async {
-    try {
-      final mainCameras = await availableCameras();
-      if (mainCameras.isNotEmpty) {
-        _cameraController = CameraController(
-          mainCameras.first,
-          ResolutionPreset.medium,
-          enableAudio: false,
-        );
+    final mainCameras = await availableCameras();
+    if (mainCameras.isNotEmpty) {
+      _cameraController = CameraController(
+        mainCameras.first,
+        ResolutionPreset.medium,
+        enableAudio: false,
+      );
 
-        await _cameraController!.initialize();
+      _cameraController!.initialize().then((_) {
         if (!mounted) return;
         setState(() {
           _isCameraInitialized = true;
         });
-      }
-    } catch (e) {
-      debugPrint('Camera initialization failed: $e');
+      }).catchError((Object e) {
+        if (e is CameraException) {
+          debugPrint('Camera initialization failed: ${e.description}');
+        }
+      });
     }
   }
 
-  /// Inserts a new parking record with explicit UTC baseline
+  // 👈 New method that saves the transaction row into your database before dialog pop-up
   Future<String?> _insertParkingSession() async {
     try {
       final vehiclePlate = _vehicleNumberController.text.trim();
       final driverName = _driverNameController.text.trim();
 
+      // Look up a fallback or target user account ID to assign the session data row
       final targetUser = _supabase.auth.currentUser?.id;
       if (targetUser == null) throw "No authorized user session active.";
 
       final response = await _supabase.from('parking_sessions').insert({
         'user_id': targetUser,
-        'vehicle_plate': vehiclePlate.toUpperCase(),
-        'driver_name': driverName.isNotEmpty ? driverName : "Guest Driver",
+        'vehicle_plate': vehiclePlate,
+        'driver_name': driverName.isNotEmpty ? driverName : "Guest Driver", // Fallback text safely matching structural type boundaries
         'assigned_bay': _selectedBay,
         'status': 'active',
-        'entry_time': DateTime.now().toUtc().toIso8601String(),
-        'current_fare': 60.0,
+        'entry_time': DateTime.now().toIso8601String(),
+        'current_fare': 60.0, // Starting first hour base rate cost parameters
       }).select('id').single();
 
-      // Sync central parking state count
-      await parkingState.syncOccupancyFromDatabase();
-
-      return response['id'] as String;
+      return response['id'] as String; // Returns the generated session UUID row key block
     } catch (e) {
       debugPrint("Database Insertion Failure: $e");
       return null;
@@ -98,129 +82,90 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
   void _processAndOpenTicket() async {
     if (_driverNameController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Please enter driver name before initiating session"),
-          backgroundColor: Colors.redAccent,
-        ),
+        const SnackBar(content: Text("Please enter driver name before initiating session"), backgroundColor: Colors.redAccent),
       );
       return;
     }
 
-    setState(() {
-      _isSaving = true;
-    });
-
+    setState(() { _isSaving = true; });
     final String? databaseSessionId = await _insertParkingSession();
-
-    if (!mounted) return;
-
-    setState(() {
-      _isSaving = false;
-    });
+    setState(() { _isSaving = false; });
 
     if (databaseSessionId != null) {
       _showQrCodeDialog(databaseSessionId);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Error communicating with remote database."),
-          backgroundColor: Colors.redAccent,
-        ),
+        const SnackBar(content: Text("Error communicating with remote storage engine."), backgroundColor: Colors.redAccent),
       );
     }
   }
 
   void _showQrCodeDialog(String sessionId) {
-    final String vehiclePlate = _vehicleNumberController.text.trim().toUpperCase();
+    final String vehiclePlate = _vehicleNumberController.text.trim();
     final String driverName = _driverNameController.text.trim();
 
+    // 👈 IMPORTANT: The QR data is now strictly the unique database row tracking ID!
+    // This allows the exit gate reader to run an immediate matching query.
+    final String qrPayloadString = sessionId;
+
     showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return Dialog(
-          backgroundColor: AppColors.surfaceDark,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  "GATE ENTRY TICKET",
-                  style: TextStyle(
-                    color: AppColors.textWhite,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.8,
-                  ),
-                ),
-                const SizedBox(height: 16),
+        context: context,
+        barrierDismissible: false, // Force user to use button to secure flow steps integrity
+        builder: (BuildContext context) {
+          return Dialog(
+            backgroundColor: AppColors.surfaceDark,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text("GATE ENTRY TICKET", style: TextStyle(color: AppColors.textWhite, fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                  const SizedBox(height: 16),
 
-                Text("Driver : $driverName", style: const TextStyle(color: AppColors.textWhite, fontSize: 15, fontWeight: FontWeight.w500)),
-                const SizedBox(height: 4),
-                Text("Plate : $vehiclePlate", style: const TextStyle(color: AppColors.textWhite, fontSize: 15, fontWeight: FontWeight.w500)),
-                const SizedBox(height: 4),
-                Text("Location : $_selectedBay", style: TextStyle(color: AppColors.textMuted.withValues(alpha: 0.8), fontSize: 13)),
+                  Text("Name : $driverName", style: const TextStyle(color: AppColors.textWhite, fontSize: 15, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 4),
+                  Text("Plate : $vehiclePlate", style: const TextStyle(color: AppColors.textWhite, fontSize: 15, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 4),
+                  Text("Location : $_selectedBay", style: TextStyle(color: AppColors.textMuted.withOpacity(0.8), fontSize: 13)),
 
-                const SizedBox(height: 12),
+                  const SizedBox(height: 24),
 
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: AppColors.accentBlue.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.timer_outlined, size: 14, color: AppColors.accentBlue),
-                      SizedBox(width: 4),
-                      Text(
-                        "Timer Started: 00:00",
-                        style: TextStyle(color: AppColors.accentBlue, fontSize: 12, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 20),
-
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: QrImageView(
-                    data: sessionId,
-                    version: QrVersions.auto,
-                    size: 180.0,
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.accentBlue,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _driverNameController.clear();
-                    },
-                    child: const Text("DONE & PRINT", style: TextStyle(color: AppColors.textWhite, fontWeight: FontWeight.bold)),
+                    child: QrImageView(
+                      data: qrPayloadString,
+                      version: QrVersions.auto,
+                      size: 200.0,
+                    ),
                   ),
-                )
-              ],
+
+                  const SizedBox(height: 24),
+
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.accentBlue,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      onPressed: () {
+                        Navigator.pop(context); // Close Dialog view window
+                        _driverNameController.clear(); // Wipe clear to reset state structures
+                      },
+                      child: const Text("DONE & PRINT", style: TextStyle(color: AppColors.textWhite, fontWeight: FontWeight.bold)),
+                    ),
+                  )
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        }
     );
   }
 
@@ -228,12 +173,11 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
     if (_cameraController == null || !_cameraController!.value.isInitialized) return;
     try {
       await _cameraController!.takePicture();
-      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Plate frame saved to temporary cache storage")),
       );
     } catch (e) {
-      debugPrint("Error capturing image: $e");
+      debugPrint("Error capturing image : $e");
     }
   }
 
@@ -241,7 +185,7 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
   void dispose() {
     _cameraController?.dispose();
     _vehicleNumberController.dispose();
-    _driverNameController.dispose();
+    _driverNameController.dispose(); // Clean release parameter memory blocks
     super.dispose();
   }
 
@@ -250,7 +194,7 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
     return Scaffold(
       backgroundColor: AppColors.primaryDark,
       body: SafeArea(
-        child: SingleChildScrollView(
+        child: SingleChildScrollView( // Added scroll layout view support to avoid keyboard layout bounds clipping errors
           padding: const EdgeInsets.symmetric(horizontal: 24.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -264,8 +208,8 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
                       icon: const Icon(Icons.arrow_back, color: AppColors.textWhite, size: 20),
                       onPressed: () {
                         Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(builder: (context) => const DashboardScreen()),
+                            context,
+                            MaterialPageRoute(builder: (context) => const DashboardScreen())
                         );
                       },
                     ),
@@ -274,13 +218,13 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
                         Container(
                           width: 8,
                           height: 8,
-                          decoration: const BoxDecoration(
+                          decoration: BoxDecoration(
                             color: AppColors.successGreen,
                             shape: BoxShape.circle,
                           ),
                         ),
                         const SizedBox(width: 8),
-                        const Text(
+                        Text(
                           "GATE ENTRY MODE",
                           style: TextStyle(
                             color: AppColors.textWhite,
@@ -299,6 +243,7 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
               ),
               const SizedBox(height: 16),
 
+              // Camera Layout
               Container(
                 width: double.infinity,
                 height: 220,
@@ -333,6 +278,7 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
               ),
               const SizedBox(height: 24),
 
+              // 👈 NEW FIELD 1: DRIVER NAME
               const Text("Driver Name", style: TextStyle(color: AppColors.textMuted, fontSize: 14)),
               const SizedBox(height: 8),
               TextFormField(
@@ -342,7 +288,7 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
                   filled: true,
                   fillColor: AppColors.surfaceDark,
                   hintText: "Enter full name",
-                  hintStyle: TextStyle(color: AppColors.textMuted.withValues(alpha: 0.3)),
+                  hintStyle: TextStyle(color: AppColors.textMuted.withOpacity(0.3)),
                   contentPadding: const EdgeInsets.all(18),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -352,6 +298,7 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
               ),
               const SizedBox(height: 20),
 
+              // FIELD 2: VEHICLE NUMBER
               const Text("Vehicle Number", style: TextStyle(color: AppColors.textMuted, fontSize: 14)),
               const SizedBox(height: 8),
               TextFormField(
@@ -369,55 +316,9 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
               ),
               const SizedBox(height: 20),
 
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text("Assigned Parking Bay", style: TextStyle(color: AppColors.textMuted, fontSize: 14)),
-                  Text(
-                    "20 Bays Available",
-                    style: TextStyle(color: AppColors.textMuted.withValues(alpha: 0.6), fontSize: 11),
-                  ),
-                ],
-              ),
+              // ASSIGNED PARKING BAY
+              const Text("Assigned Parking Bay", style: TextStyle(color: AppColors.textMuted, fontSize: 14)),
               const SizedBox(height: 8),
-
-              // Zone Selector (A, B, C, D)
-              Row(
-                children: ['A', 'B', 'C', 'D'].map((zone) {
-                  final bool isSelected = _selectedZone == zone;
-                  return Expanded(
-                    child: GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          _selectedZone = zone;
-                          _selectedBay = _zoneBays[zone]!.first;
-                        });
-                      },
-                      child: Container(
-                        margin: const EdgeInsets.only(right: 6),
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        decoration: BoxDecoration(
-                          color: isSelected ? AppColors.accentBlue : AppColors.surfaceDark,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Center(
-                          child: Text(
-                            "Zone $zone",
-                            style: TextStyle(
-                              color: isSelected ? AppColors.textWhite : AppColors.textMuted,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 10),
-
-              // Filtered Bay Dropdown (5 bays per zone)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -428,11 +329,8 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
                     dropdownColor: AppColors.surfaceDark,
                     icon: const Icon(Icons.keyboard_arrow_down, color: AppColors.textMuted),
                     style: const TextStyle(color: AppColors.textWhite, fontSize: 16, fontWeight: FontWeight.bold),
-                    items: (_zoneBays[_selectedZone] ?? []).map((String bay) {
-                      return DropdownMenuItem<String>(
-                        value: bay,
-                        child: Text(bay),
-                      );
+                    items: <String>['Bay: A12', 'Bay: B04', 'Bay: C09', 'Bay: D15'].map((String value) {
+                      return DropdownMenuItem<String>(value: value, child: Text(value));
                     }).toList(),
                     onChanged: (String? newValue) {
                       if (newValue != null) {
@@ -446,6 +344,7 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
               ),
               const SizedBox(height: 32),
 
+              // MASTER ACTION TRIGGER BUTTON
               Container(
                 width: double.infinity,
                 height: 54,
@@ -458,10 +357,7 @@ class _GateEntryScreenState extends State<GateEntryScreen> {
                   onPressed: _isSaving ? null : _processAndOpenTicket,
                   child: _isSaving
                       ? const CircularProgressIndicator(color: AppColors.textWhite)
-                      : const Text(
-                    "START SESSION & GENERATE QR",
-                    style: TextStyle(color: AppColors.textWhite, fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
+                      : const Text("START SESSION & GENERATE QR", style: TextStyle(color: AppColors.textWhite, fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
               )
             ],
